@@ -7,27 +7,63 @@ from PyQt5.QtGui import QPixmap, QPainter,QImage,QPen
 from PyQt5.QtCore import pyqtSignal, pyqtSlot, Qt, QThread,QPoint,QRect
 
 import numpy as np
-from ultralytics import YOLO
-from my_alpr import Ui_MainWindow
+from my_alpr3 import Ui_MainWindow
 import imutils
 # -----------------Counting Thread-----------------
 from collections import defaultdict
 from math import sqrt
 import wx
+import re
+import os
+import torch
 # -------------------------------------------------
 from tracking.sort import Sort
+from utils.utils import map_label, check_image_size, draw_text, check_legit_plate, \
+    gettime, compute_color, argmax, BGR_COLORS, VEHICLES, crop_expanded_plate
 
 #--------------------------------------------------
+from ppocr_onnx import DetAndRecONNXPipeline as PlateReader
+from tracking.sort import Sort
+from ultralytics import YOLO
+#--------------------------------------------------
+
 class VideoThread(QThread):
     change_pixmap_signal = pyqtSignal(np.ndarray)
+    vehicle_count_signal = pyqtSignal(dict)
+
     def __init__(self):
         super().__init__()
         self._run_flag = True
         self.data = ""
         self.video_path=""
         self.vehicle_detector_path=""
-        self.Mode =0
-        self.classes =[]
+        self.Mode = 0
+        self.classes = []
+
+        self.vehicle_detector = YOLO(self.vehicle_detector_path, task='detect')
+        self.plate_detector = YOLO("weights/plate_yolov8n_320_2024.engine", task='detect')
+        self.plate_reader = PlateReader(
+            text_det_onnx_model="weights/ppocrv4/ch_PP-OCRv4_det_infer.onnx",
+            text_rec_onnx_model="weights/ppocrv4/ch_PP-OCRv4_rec_infer.onnx",
+            box_thresh=0.6)
+        self.ocr_thres = 0.95
+        
+        
+        #-------------------Tracker----------------
+        self.dsort_weight = "weights/deepsort/deepsort.onnx"
+        self.init_tracker()
+        #------------------------------------------
+
+        self.vehicleCounter = {
+            0: 0, #bus
+            1: 0, #car
+            2: 0, #motorcycle
+            3: 0 #truck
+        }
+
+        # Miscellaneous for displaying
+        self.save_dir = "data/logs"
+        self.save = True
 
         #print(self.data)
     @pyqtSlot(dict)
@@ -44,6 +80,7 @@ class VideoThread(QThread):
         self.CountMode= dict_data["CountMode"]
         self.LinePoint=dict_data["LinePoint"]
         self.PolygonPoint=dict_data["PolygonPoint"]
+        self.ReadPlate=dict_data["ReadPlate"]
 
         print(self.video_path)
         print(self.vehicle_detector_path)
@@ -53,6 +90,7 @@ class VideoThread(QThread):
         print(self.CountMode)
         print(self.LinePoint)
         print(self.PolygonPoint)
+        print(self.ReadPlate)
     # Mathemetic Function find a distance between a line an point
 
 
@@ -103,17 +141,19 @@ class VideoThread(QThread):
                 success, frame = cap.read()
                 if success:
                     #frame = cv2.resize(frame, (1380, 920))
-                    frame = imutils.resize(frame,width=901)
+                    frame = imutils.resize(frame,width=1080)
                     #results = model.track(frame, persist=True, classes=[0])  # Tracking Car only
                     if self.classes == []:
                         results = model.track(frame, persist=True)
                     else:
                         results = model.track(frame, persist=True, classes=self.classes)
 
+                    
                     if results[0].boxes.id != None:
                         boxes = results[0].boxes.xywh.cpu()
                         # print(boxes)
                         track_ids = results[0].boxes.id.int().cpu().tolist()
+                        vehicle_classes = results[0].boxes.cls.int().cpu().tolist()
                         # Visualize the results on the frame
                         # annotated_frame = results[0].plot()
                         annotated_frame = frame
@@ -125,7 +165,7 @@ class VideoThread(QThread):
                         pos_label_L = []
 
                         # Plot the tracks
-                        for box, track_id in zip(boxes, track_ids):
+                        for box, track_id, cls in zip(boxes, track_ids, vehicle_classes):
                             x, y, w, h = box
                             track = track_history[track_id]
                             track.append((float(x), float(y)))  # x, y center point
@@ -149,9 +189,13 @@ class VideoThread(QThread):
                                                       (int(x + w / 2), int(y + h / 2)),
                                                       (0, 255, 0), 2)
                                         counterP[idx] += 1
+                                                
                                         # Remember Object Passing the area
                                         if track_id not in crossed_objects1[idx]:
                                             crossed_objects1[idx][track_id] = True
+                                            self.vehicleCounter[cls] += 1
+                                        
+                                            
 
                                         # --------------------Final - Polygon --------------------------------------
                                         # print(counter)
@@ -183,6 +227,8 @@ class VideoThread(QThread):
                                         if distance[idx] < obcross:  # Assuming objects cross horizontally
                                             if track_id not in crossed_objects[idx]:
                                                 crossed_objects[idx][track_id] = True
+                                                self.vehicleCounter[cls] += 1
+                                            
                                             # Annotate the object as it crosses the line
                                             cv2.rectangle(annotated_frame, (int(x - w / 2), int(y - h / 2)),
                                                           (int(x + w / 2), int(y + h / 2)), (0, 255, 0), 2)
@@ -204,34 +250,106 @@ class VideoThread(QThread):
                                 # print(pos_label_L)'''
                         # -----------------Final Display -----Polygon---------And Line------
 
-                        for idx, pos in enumerate(pos_label_L):
-                            # print(pos)
-                            cv2.putText(annotated_frame, "Count In Line: " + str(counterL[idx]), (pos[0], pos[1]),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 1.3, (255, 255, 0), 2)
-                            # print(counterL[idx])
-                        # --------------------------------------------------
+                        # for idx, pos in enumerate(pos_label_L):
+                        #     # print(pos)
+                        #     cv2.putText(annotated_frame, "Count In Line: " + str(counterL[idx]), (pos[0], pos[1]),
+                        #                 cv2.FONT_HERSHEY_SIMPLEX, 1.3, (255, 255, 0), 2)
+                        #     # print(counterL[idx])
+                        # # --------------------------------------------------
 
-                        for index, pos in enumerate(pos_label_P):
-                            cv2.putText(annotated_frame, "Count In Region: " + str(counterP[index]), (pos[0], pos[1]),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 0), 2)
-                            # print(index)
-                            # print(pos)
-                            cv2.putText(annotated_frame, "Count Obj pass: " + str(len(crossed_objects1[index])),
-                                        (pos[0], pos[1] + 150),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+                        # for index, pos in enumerate(pos_label_P):
+                        #     cv2.putText(annotated_frame, "Count In Region: " + str(counterP[index]), (pos[0], pos[1]),
+                        #                 cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 0), 2)
+                        #     # print(index)
+                        #     # print(pos)
+                        #     cv2.putText(annotated_frame, "Count Obj pass: " + str(len(crossed_objects1[index])),
+                        #                 (pos[0], pos[1] + 150),
+                        #                 cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
                         self.change_pixmap_signal.emit(annotated_frame)
-
-                        # display(annotated_frame)
+                        self.vehicle_count_signal.emit(self.vehicleCounter)
+                        # display(annotated_frame) 
                 else:
                     print("Video Completed")
                     break
                 #cap.release()
+        elif vehicle_detector_path != "" and video_path != "" and self.ReadPlate and not self.CountMode:
+            cap = cv2.VideoCapture(video_path)
+            num_frame = 0 
+            while cap.isOpened():
+                ret, frame = cap.read()
+                num_frame += 1
+                if int(num_frame) == 500:
+                    self.init_tracker()
+                if frame is not None:
+                    displayed_frame = frame.copy()
+                else:
+                    continue
+                if ret:
+                    """
+                    --------------- VEHICLE DETECTION ---------------
+                    Plate recognition include two subsections: detection and tracking
+                        - Detection: Ultralytics YOLOv8
+                        - Tracking: DeepSORT
+                    """
+                    vehicle_detection = self.vehicle_detector(
+                        frame, 
+                        verbose=False, 
+                        imgsz=640,
+                        device="0",
+                        conf=0.6)[0]
+                    vehicle_boxes = vehicle_detection.boxes
+                    vehicle_xyxy = vehicle_boxes.xyxy
+                    vehicle_labels = vehicle_boxes.cls
+
+                    try:        
+                        outputs = self.tracker.update(vehicle_boxes.cpu().xyxy).astype(int)
+                    except BaseException:
+                        continue
+
+                    in_frame_indentities = []
+
+                    for idx in range(len(outputs)):
+                        identity = outputs[idx, -1]
+                        in_frame_indentities.append(identity)
+                        if str(identity) not in self.vehicles_dict:
+                            self.vehicles_dict[str(identity)] = {"save": False,
+                                                                "saved_plate": False,
+                                                                "plate_image": None,
+                                                                "vehicle_image": None}
+                        self.vehicles_dict[str(
+                            identity)]["bbox_xyxy"] = outputs[idx, :4]
+                        vehicle_bbox = self.vehicles_dict[str(
+                            identity)]["bbox_xyxy"]
+                        src_point = (vehicle_bbox[0], vehicle_bbox[1])
+                        dst_point = (vehicle_bbox[2], vehicle_bbox[3])
+                        color = compute_color(identity)
+                        cv2.rectangle(
+                            displayed_frame, src_point, dst_point, color, 1)
+                        
+                    self.change_pixmap_signal.emit(displayed_frame)
 
         else:
 
-            print(" Not Config this Mode")
+            print("Not Config this Mode")
+    
 
 
+    def extract_plate(self, plate_image):
+        results = self.plate_reader.detect_and_ocr(plate_image)
+        if len(results) > 0:
+            plate_info = ''
+            conf = []
+            for result in results:
+                plate_info += result.text + ' '
+                conf.append(result.score)
+            conf = sum(conf) / len(conf)
+            return re.sub(r'[^A-Za-z0-9\-.]', '', plate_info), conf
+        else:
+            return '', 0
+    
+    def init_tracker(self):
+        self.tracker = Sort()
+        self.vehicles_dict = {}
 
     def stop(self):
         """Sets run flag to False and waits for thread to finish"""
@@ -309,14 +427,15 @@ class MainWindow(QMainWindow):
         print(height)
 
         # ------------------------------------------------------
-        self.display_width = 921
-        self.display_height = 471
+        self.display_width = 1080   
+        self.display_height = 720
         #self.setGeometry(30, 30, 1000, 600)
         # create the label that holds the image
         self.uic.label_img.resize(self.display_width, self.display_height)
 
         self.uic.vid_pat.clicked.connect(self.selectVideo)
         self.uic.vid_pat.clicked.connect(self.selectPretrain)
+        self.uic.vid_pat.clicked.connect(self.videoMode)
 
         self.uic.ShowBt.clicked.connect(self.start)
 
@@ -324,12 +443,12 @@ class MainWindow(QMainWindow):
         self.uic.ExitBt.clicked.connect(self.close)
         self.uic.ClearDatapoint.clicked.connect(self.cleardata)
 
-
         #-------------------------------------------
         self.thread = VideoThread()
         # connect its signal to the update_image slot
         self.thread.change_pixmap_signal.connect(self.update_image)
         self.dataconfig.connect(self.thread.receivedata)
+        self.thread.vehicle_count_signal.connect(self.updateCounter)
 
         # ------------------------------------------------------
         self.classes=[]
@@ -338,11 +457,10 @@ class MainWindow(QMainWindow):
         self.pretrainpath =""
         self.status = False
 
-
         #------------------------------------------------
         #Draw
         self.begin, self.destination = QPoint(), QPoint()
-        self.pix =None
+        self.pix=None
 
         self.LinePoint=[]
         self.MultilinePoint=[]
@@ -357,6 +475,13 @@ class MainWindow(QMainWindow):
 
 
 #----------------------------------------------
+    def videoMode(self):
+        self.uic.pattle.setText("Video Mode")
+        self.uic.pattle.setAlignment(Qt.AlignCenter)
+    
+    def cameraMode(self):
+        self.uic.pattle.setText("Camera Mode")
+
     def start(self):
         if self.video_path!="" and self.pretrainpath!="":
             self.Mode = self.uic.Combo_Mode.currentIndex()
@@ -377,13 +502,20 @@ class MainWindow(QMainWindow):
             if self.MultilinePoint or self.MutiPolypoint and self.uic.Combo_Mode.currentIndex()==2:
                 data = {'classes': self.classes, 'Mode': self.Mode, 'v': self.video_path, 'pt': self.pretrainpath,
                         'flag': True, "CountMode": True, "LinePoint": self.MultilinePoint,
-                        "PolygonPoint": self.MutiPolypoint}
-
+                        "PolygonPoint": self.MutiPolypoint, 
+                        "ReadPlate": False}
+                
+            elif self.uic.Combo_Mode.currentIndex()==3:
+                data = {'classes': self.classes, 'Mode': self.Mode, 'v': self.video_path, 'pt': self.pretrainpath,
+                        'flag': True, "CountMode": False, "LinePoint": [],
+                        "PolygonPoint": [], 
+                        "ReadPlate": True}
 
             else:
                 data = {'classes': self.classes, 'Mode': self.Mode, 'v': self.video_path, 'pt': self.pretrainpath,
                     'flag': True, "CountMode": False, "LinePoint": [],
-                    "PolygonPoint": []}
+                    "PolygonPoint": [], 
+                    "ReadPlate": False}
 
             # print(data)
             self.dataconfig.emit(data)
@@ -396,7 +528,7 @@ class MainWindow(QMainWindow):
 
     def selectVideo(self):
         dialog = QFileDialog(self)
-        dialog.setDirectory(r'C:\image')
+        dialog.setDirectory(r'..')
         dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
         dialog.setNameFilter("VideoFile (*.mp4 )")
         dialog.setViewMode(QFileDialog.ViewMode.List)
@@ -411,7 +543,7 @@ class MainWindow(QMainWindow):
 
     def selectPretrain(self):
         dialog = QFileDialog(self)
-        dialog.setDirectory(r'C:\image')
+        dialog.setDirectory(r'..')
         dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
         dialog.setNameFilter("PretrainFile (*.pt )")
         dialog.setViewMode(QFileDialog.ViewMode.List)
@@ -425,6 +557,15 @@ class MainWindow(QMainWindow):
                 self.uic.PretrainPathTxt.setText(str(Path(filenames[0])))
 
                 names_classes=self.classesUpdate(self.video_path,self.pretrainpath)
+    
+    #------------------------------------------------
+    #Update counter
+    @pyqtSlot(dict)
+    def updateCounter(self):
+        self.uic.textBrowser.setText(str(self.thread.vehicleCounter[1]))
+        self.uic.textBrowser_2.setText(str(self.thread.vehicleCounter[3]))
+        self.uic.textBrowser_3.setText(str(self.thread.vehicleCounter[2]))
+        self.uic.textBrowser_4.setText(str(self.thread.vehicleCounter[0]))
 
     def closeEvent(self, event):
         self.thread.stop()
@@ -444,9 +585,7 @@ class MainWindow(QMainWindow):
         qt_img = self.convert_cv_qt(cv_img)
         self.pix = qt_img
         self.uic.label_img.setPixmap(qt_img)
-
-
-
+    
     def convert_cv_qt(self, cv_img):
         """Convert from an opencv image to QPixmap"""
         rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
@@ -455,6 +594,7 @@ class MainWindow(QMainWindow):
         convert_to_Qt_format = QtGui.QImage(rgb_image.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
         p = convert_to_Qt_format.scaled(self.display_width, self.display_height, Qt.KeepAspectRatio)
         return QPixmap.fromImage(p)
+    
     def classesUpdate(self, video_path, yolo_path):
         names_classes = []
         model = YOLO(yolo_path)
@@ -505,7 +645,6 @@ class MainWindow(QMainWindow):
 
                 elif index == 2:
                     painter.drawLine(self.begin.x(),self.begin.y(), self.destination.x(),self.destination.y())
-
 
     def mousePressEvent(self, event):
         if event.buttons() & Qt.LeftButton and event.pos().x()<self.display_width and event.pos().y()<self.display_height:
@@ -584,6 +723,14 @@ class MainWindow(QMainWindow):
 
 
             self.uic.PointData.setText("")
+
+            self.uic.textBrowser.setText("")
+            self.uic.textBrowser_2.setText("")
+            self.uic.textBrowser_3.setText("")
+            self.uic.textBrowser_4.setText("")
+
+            self.uic.pattle.setText("")
+            
             self.update_image(self.image)
         else:
             print(" Please stop the QThread operation before clear data")
