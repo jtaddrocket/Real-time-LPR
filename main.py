@@ -328,11 +328,11 @@ class TrafficCam():
                         # 2. tồn tại 1 chữ cái theo sau là ít nhất 4 chữ số, ví dụ: _B1234_. Nếu đúng, check điều kiện bổ sung
                         # 3. điều kiện bổ sung: chuỗi k bắt đầu bằng 2 chữ cái, tức là chuỗi bắt đầu bằng số
                         success = (vehicle["ocr_conf"] > self.ocr_thres) \
-                                  and len(plate_number) > 5 \
-                                #   and check_legit_plate(plate_number) 
+                                  and check_legit_plate(plate_number) 
+                                #   and len(plate_number) > 7 \
                         # Nếu thành công
                         if success:
-                            # hiển thị thông tin biển số xe
+                            # Sửa lại thông tin biển số nếu có
                             plate_number = correct_plate(plate_number)
                             
                             pos = (box[0], box[1] + 26)

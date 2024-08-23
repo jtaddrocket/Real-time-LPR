@@ -287,8 +287,9 @@ def check_legit_plate(s):
     s_cleaned = re.sub(r'[.\-\s]', '', s)
     
     # thiếu ký tự: recog lại
-    if len(s) > 9 or len(s) < 8:
+    if len(s_cleaned) > 9 or len(s_cleaned) < 8:
         return False
+    return True
     
     # # chứa ký tự viết thường: recog lại
     # if re.search(r'[a-z]', s):
@@ -299,50 +300,52 @@ def check_legit_plate(s):
     # =============================
     # Regular expressions for different cases
     # biển quân đội
-    pattern1 = r'^[A-Z]{2}[0-9]{4}$'  # Matches exactly 2 letters followed by exactly 4 digits
-    # biển khác
-    pattern2 = r'[A-Z][0-9]{4,}'      # Matches an alphabet character followed by at least 4 digits
+    # pattern1 = r'^[A-Z]{2}[0-9]{4}$'  # Matches exactly 2 letters followed by exactly 4 digits
+    # # biển khác
+    # pattern2 = r'[A-Z][0-9]{4,}'      # Matches an alphabet character followed by at least 4 digits
     
-    # Check if the cleaned string matches either pattern
-    if re.search(pattern1, s_cleaned) or (re.search(pattern2, s_cleaned) and not re.match(r'^[A-Z]{2}', s_cleaned)):
-        return True
-    else:
-        return False
+    # # Check if the cleaned string matches either pattern
+    # if re.search(pattern1, s_cleaned) or (re.search(pattern2, s_cleaned) and not re.match(r'^[A-Z]{2}', s_cleaned)):
+    #     return True
+    # else:
+    #     return False
     # ==========================
 
 
-dict_char_to_int = {
-                    'A': '4', 
-                    'B': '8',
-                    'C': '0', # 61-B19997C
-                    'D': '0', # nếu sau chữ cái cuối cùng có 5 
-                    'G': '6', # G1Z1112 (s)
-                    'U': '0', # 6UC54536 (ds n)
-                    'I': '1', # SIF69116
-                    'T': '1', # 59-YT14999 (ds n)
-                    'L': '4', # 63BL25751, 6L.3Z41204, 85-R3L336, L8-E11362, 5L-X85917
-                    'S': '5', #51-SS4867 (ds n), 89-HS3589 (ds n), SIF69116 (ds n) 
-                    'Z': '2', # 61-SZ2916 (ds n), 6L.3Z41204 (ds n), 67LZ12199 (ds n)
-                    # 'Z': '7', # 63-1Z9710, Z1-B4054.00 (deepsort k legit)
-                    }
-dict_int_to_char = {
-                    # '0': 'C', # 60-0192160 (ds n)
-                    '0': 'D', # 61-01663.65, 61LD036.81(TH đúng), 77-01147.31
-                    '2': 'Z',
-                    '1': 'L', # 37-1217020, 78-119281, 371217020
-                    # '1': 'T', # 47-11039043 (ds n)
-                    # '1': 'X', # 59-1287267, 63-1Z9710, 61121112
-                    '6': 'G', # 516153602
-                    '8': 'B', # 48-81583.65, 72803844 (rất nhiều)
-                    } 
-dict_int_to_int = {'0': '8', # 09-H53589, 06-B10686            
-                    }
-# Ký tự thừa: 71-C2K46290 (k) (ds n), 543F24992 (ds n) (3)
-# thiếu ký tự: 1-C26290, 9-X2979, 37-L2170, 60A2407, 61A3407, G1Z1112
-# sai: 36-D1520b, 64.d241204, F116436
-# bỏ ký tự đặc biệt -> chuẩn hóa lại biển số -> Nếu tồn tại biển số rồi -> bỏ qua
 
 def correct_plate(s):
+
+    dict_char_to_int = {
+                        'A': '4', 
+                        'B': '8',
+                        'C': '0', # 61-B19997C
+                        'D': '0', # nếu sau chữ cái cuối cùng có 5 
+                        'G': '6', # G1Z1112 (s)
+                        'U': '0', # 6UC54536 (ds n)
+                        'I': '1', # SIF69116
+                        'T': '1', # 59-YT14999 (ds n)
+                        'L': '4', # 63BL25751, 6L.3Z41204, 85-R3L336, L8-E11362, 5L-X85917
+                        'S': '5', #51-SS4867 (ds n), 89-HS3589 (ds n), SIF69116 (ds n) 
+                        'Z': '2', # 61-SZ2916 (ds n), 6L.3Z41204 (ds n), 67LZ12199 (ds n)
+                        # 'Z': '7', # 63-1Z9710, Z1-B4054.00 (deepsort k legit)
+                        }
+    dict_int_to_char = {
+                        # '0': 'C', # 60-0192160 (ds n)
+                        '0': 'D', # 61-01663.65, 61LD036.81(TH đúng), 77-01147.31
+                        '2': 'Z',
+                        '1': 'L', # 37-1217020, 78-119281, 371217020
+                        # '1': 'T', # 47-11039043 (ds n)
+                        # '1': 'X', # 59-1287267, 63-1Z9710, 61121112
+                        '6': 'G', # 516153602
+                        '8': 'B', # 48-81583.65, 72803844 (rất nhiều)
+                        } 
+    dict_int_to_int = {'0': '8', # 09-H53589, 06-B10686            
+                        }
+    # Ký tự thừa: 71-C2K46290 (k) (ds n), 543F24992 (ds n) (3)
+    # thiếu ký tự: 1-C26290, 9-X2979, 37-L2170, 60A2407, 61A3407, G1Z1112
+    # sai: 36-D1520b, 64.d241204, F116436
+    # bỏ ký tự đặc biệt -> chuẩn hóa lại biển số -> Nếu tồn tại biển số rồi -> bỏ qua
+    
     s = re.sub(r'[.\-\s]', '', s)
     # case 1: số 0 ở đầu
     if s[0] == '0':

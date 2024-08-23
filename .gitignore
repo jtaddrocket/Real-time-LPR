@@ -2,4 +2,6 @@ data/
 
 **/__pycache__/
 
+CamShow1.py
 
+.gitignore
