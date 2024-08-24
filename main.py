@@ -267,27 +267,27 @@ class TrafficCam():
                         displayed_frame, src_point, dst_point, color, 2)
 
                     # # ================= DRAW ID =====================
-                    text = f"ID: {identity}"
-                    text_position = (src_point[0], src_point[1] - 10)
+                    # text = f"ID: {identity}"
+                    # text_position = (src_point[0], src_point[1] - 10)
 
-                    # Get the text size and create a background rectangle
-                    (font_scale, thickness) = (0.5, 2)
-                    (text_w, text_h), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-                    background_x0 = src_point[0]
-                    background_y0 = src_point[1] - text_h - 10
-                    background_x1 = src_point[0] + text_w
-                    background_y1 = src_point[1]
+                    # # Get the text size and create a background rectangle
+                    # (font_scale, thickness) = (0.5, 2)
+                    # (text_w, text_h), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+                    # background_x0 = src_point[0]
+                    # background_y0 = src_point[1] - text_h - 10
+                    # background_x1 = src_point[0] + text_w
+                    # background_y1 = src_point[1]
 
-                    # Draw the semi-transparent background rectangle
-                    overlay = displayed_frame.copy()
-                    cv2.rectangle(overlay, (background_x0, background_y0), (background_x1, background_y1), (0, 0, 0),
-                                  -1)
-                    alpha = 0.8  # Transparency factor
-                    cv2.addWeighted(overlay, alpha, displayed_frame, 1 - alpha, 0, displayed_frame)
+                    # # Draw the semi-transparent background rectangle
+                    # overlay = displayed_frame.copy()
+                    # cv2.rectangle(overlay, (background_x0, background_y0), (background_x1, background_y1), (0, 0, 0),
+                    #               -1)
+                    # alpha = 0.8  # Transparency factor
+                    # cv2.addWeighted(overlay, alpha, displayed_frame, 1 - alpha, 0, displayed_frame)
 
-                    # Put the text on top of the background
-                    cv2.putText(displayed_frame, text, text_position, cv2.FONT_HERSHEY_SIMPLEX, font_scale,
-                                (255, 255, 255), thickness)
+                    # # Put the text on top of the background
+                    # cv2.putText(displayed_frame, text, text_position, cv2.FONT_HERSHEY_SIMPLEX, font_scale,
+                    #             (255, 255, 255), thickness)
                     # # ================= DRAW ID =====================
 
                 for index, box in enumerate(vehicle_xyxy):
@@ -295,10 +295,10 @@ class TrafficCam():
                         continue
                     label_name = map_label(int(vehicle_labels[index]), VEHICLES[self.lang])
                     box = box.cpu().numpy().astype(int)
-                    draw_text(img=displayed_frame, text=label_name,
-                              pos=(box[0], box[1]),
-                              text_color=self.color["blue"],
-                              text_color_bg=self.color["green"])
+                    # draw_text(img=displayed_frame, text=label_name,
+                    #           pos=(box[0], box[1]),
+                    #           text_color=self.color["blue"],
+                    #           text_color_bg=self.color["green"])
 
                 """
                 --------------- PLATE RECOGNITION ---------------
@@ -372,9 +372,9 @@ class TrafficCam():
                         # Nếu không đạt yêu cầu OCR
                         else:
                             # Nếu không trong vùng nhận diện -> Loại khỏi `in_frame_indentities`
-                            if box[1] < thresh_h or box[3] > h - thresh_h:  # Ignore vehicle out of recognition zone
-                                in_frame_indentities.remove(identity)
-                                continue
+                            # if box[1] < thresh_h or box[3] > h - thresh_h:  # Ignore vehicle out of recognition zone
+                            #     in_frame_indentities.remove(identity)
+                            #     continue
 
                             # Nếu trong vùng nhận diện:
                             # crop ảnh xe
