@@ -295,10 +295,10 @@ class TrafficCam():
                         continue
                     label_name = map_label(int(vehicle_labels[index]), VEHICLES[self.lang])
                     box = box.cpu().numpy().astype(int)
-                    # draw_text(img=displayed_frame, text=label_name,
-                    #           pos=(box[0], box[1]),
-                    #           text_color=self.color["blue"],
-                    #           text_color_bg=self.color["green"])
+                    draw_text(img=displayed_frame, text=label_name,
+                              pos=(box[0], box[1]),
+                              text_color=self.color["blue"],
+                              text_color_bg=self.color["green"])
 
                 """
                 --------------- PLATE RECOGNITION ---------------

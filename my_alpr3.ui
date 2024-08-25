@@ -923,11 +923,6 @@ color: rgb(0, 255, 0);</string>
       <string>Draw Rectangle</string>
      </property>
     </item>
-    <item>
-     <property name="text">
-      <string>Draw Polyline</string>
-     </property>
-    </item>
    </widget>
    <widget class="QLineEdit" name="SelectClasses">
     <property name="geometry">

@@ -3,10 +3,8 @@ from PyQt5.QtWidgets import QApplication, QMainWindow
 from PyQt5 import QtCore, QtGui, QtWidgets
 from pathlib import Path
 from PyQt5.QtWidgets import QWidget, QApplication, QLabel, QVBoxLayout,QMenu, QAction,QPushButton,QInputDialog,QFileDialog
-from PyQt5.QtGui import QPixmap, QPainter,QImage,QPen
+from PyQt5.QtGui import QPixmap, QPainter, QImage, QPen
 from PyQt5.QtCore import pyqtSignal, pyqtSlot, Qt, QThread,QPoint,QRect
-from tracking.deep_sort import DeepSort
-
 
 import numpy as np
 from my_alpr3 import Ui_MainWindow
@@ -38,12 +36,12 @@ class VideoThread(QThread):
         self._run_flag = True
         self.data = ""
         self.video_path=""
-        self.vehicle_detector_path="weights/vehicle_yolov8s_640.pt"
+        self.vehicle_detector_path=""
         self.Mode = 0
         self.classes = []
 
         self.vehicle_detector = YOLO(self.vehicle_detector_path, task='detect')
-        self.plate_detector = YOLO("weights/plate_yolov8n_320_2024.pt", task='detect')
+        self.plate_detector = YOLO("weights/plate_yolov8n_320_2024.engine", task='detect')
         self.plate_reader = PlateReader(
             text_det_onnx_model="weights/ppocrv4/ch_PP-OCRv4_det_infer.onnx",
             text_rec_onnx_model="weights/ppocrv4/ch_PP-OCRv4_rec_infer.onnx",
@@ -52,7 +50,7 @@ class VideoThread(QThread):
         
         
         #-------------------Tracker----------------
-        self.dsort_weight = "weights/reid_model.onnx"
+        self.dsort_weight = "weights/deepsort/deepsort.onnx"
         self.init_tracker()
         #------------------------------------------
 
@@ -114,9 +112,9 @@ class VideoThread(QThread):
                             results = model.predict(frame, classes=self.classes)
                     else:
                         if self.classes == []:
-                            results = model.track(frame,persist=True)
+                            results = model.track(frame,persist=True, tracker="bytetrack.yaml")
                         else:
-                            results = model.track(frame, persist=True,classes=self.classes)
+                            results = model.track(frame, persist=True,classes=self.classes, tracker="bytetrack.yaml")
                     annotated_frame = results[0].plot()
                     #---------------------------------------------------#
                     self.change_pixmap_signal.emit(annotated_frame)
@@ -146,9 +144,9 @@ class VideoThread(QThread):
                     frame = imutils.resize(frame,width=1080)
                     #results = model.track(frame, persist=True, classes=[0])  # Tracking Car only
                     if self.classes == []:
-                        results = model.track(frame, persist=True)
+                        results = model.track(frame, persist=True, tracker="bytetrack.yaml")
                     else:
-                        results = model.track(frame, persist=True, classes=self.classes)
+                        results = model.track(frame, persist=True, classes=self.classes, tracker="bytetrack.yaml")
 
                     
                     if results[0].boxes.id != None:
@@ -304,9 +302,7 @@ class VideoThread(QThread):
                     vehicle_labels = vehicle_boxes.cls
 
                     try:        
-                        outputs = self.tracker.update(vehicle_boxes.cpu().xywh,
-                                                      vehicle_boxes.cpu().conf,
-                                                      frame)
+                        outputs = self.tracker.update(vehicle_boxes.cpu().xyxy).astype(int)
                     except BaseException:
                         continue
 
@@ -352,12 +348,7 @@ class VideoThread(QThread):
             return '', 0
     
     def init_tracker(self):
-        # self.tracker = Sort()
-        self.tracker = DeepSort(self.dsort_weight, max_dist=0.2,
-                                    min_confidence=0.3, nms_max_overlap=0.5,
-                                    max_iou_distance=0.7, max_age=70,
-                                    n_init=3, nn_budget=100,
-                                    use_cuda=torch.cuda.is_available())
+        self.tracker = Sort()
         self.vehicles_dict = {}
 
     def stop(self):
@@ -443,8 +434,7 @@ class MainWindow(QMainWindow):
         self.uic.label_img.resize(self.display_width, self.display_height)
 
         self.uic.vid_pat.clicked.connect(self.selectVideo)
-        self.pretrainpath = "weights/vehicle_yolov8s_640.pt"
-        self.uic.PretrainPathTxt.setText(self.pretrainpath)
+        self.uic.vid_pat.clicked.connect(self.selectPretrain)
         self.uic.vid_pat.clicked.connect(self.videoMode)
 
         self.uic.ShowBt.clicked.connect(self.start)
@@ -464,7 +454,7 @@ class MainWindow(QMainWindow):
         self.classes=[]
         self.Mode = 0
         self.video_path =""
-        # self.uic.vid_pat.clicked.connect(self.selectPretrain)
+        self.pretrainpath =""
         self.status = False
 
         #------------------------------------------------
@@ -551,20 +541,22 @@ class MainWindow(QMainWindow):
                 self.uic.Videopath_txt.setText(str(Path(filenames[0])))
 
 
-    # def selectPretrain(self):
-    #     dialog = QFileDialog(self)
-    #     dialog.setDirectory(r'..')
-    #     dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
-    #     dialog.setNameFilter("PretrainFile (*.pt )")
-    #     dialog.setViewMode(QFileDialog.ViewMode.List)
-    #     if dialog.exec():
-    #         filenames = dialog.selectedFiles()
-    #         if filenames:
-    #             self.pretrainpath = str(Path(filenames[0]))
-    #             self.uic.PretrainPathTxt.setText(self.pretrainpath)
-                
-    #             names_classes = self.classesUpdate(self.video_path, self.pretrainpath)
+    def selectPretrain(self):
+        dialog = QFileDialog(self)
+        dialog.setDirectory(r'..')
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
+        dialog.setNameFilter("PretrainFile (*.pt )")
+        dialog.setViewMode(QFileDialog.ViewMode.List)
+        if dialog.exec():
+            filenames = dialog.selectedFiles()
+            #print(filenames
+            if filenames:
+                # self.file_list.addItems([str(Path(filename)) for filename in filenames])
+                # self.uic.source_pretrain_file.setText(str(Path(filenames[0])))
+                self.pretrainpath =str(Path(filenames[0]))
+                self.uic.PretrainPathTxt.setText(str(Path(filenames[0])))
 
+                names_classes=self.classesUpdate(self.video_path,self.pretrainpath)
     
     #------------------------------------------------
     #Update counter
@@ -737,7 +729,7 @@ class MainWindow(QMainWindow):
             self.uic.textBrowser_3.setText("")
             self.uic.textBrowser_4.setText("")
 
-            self.uic.pattle.setText("")
+            # self.uic.pattle.setText("")
             
             self.update_image(self.image)
         else:
