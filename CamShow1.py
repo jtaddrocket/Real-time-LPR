@@ -8,7 +8,7 @@ from PyQt5.QtCore import pyqtSignal, pyqtSlot, Qt, QThread,QPoint,QRect
 
 import time 
 import numpy as np
-from my_alpr4 import Ui_MainWindow
+from my_alpr5 import Ui_MainWindow
 import imutils
 # -----------------Counting Thread-----------------
 from collections import defaultdict
@@ -22,14 +22,11 @@ from tracking.sort import Sort
 from tracking.deep_sort import DeepSort
 from utils.utils import map_label, check_image_size, draw_text, check_legit_plate, \
     gettime, compute_color, argmax, BGR_COLORS, VEHICLES, crop_expanded_plate, correct_plate
-    
 
 #--------------------------------------------------
 from ppocr_onnx import DetAndRecONNXPipeline as PlateReader
 from tracking.sort import Sort
 from ultralytics import YOLO
-from PyQt5.QtCore import QThread, QWaitCondition, QMutex
-
 #--------------------------------------------------
 
 class VideoThread(QThread):
@@ -53,11 +50,6 @@ class VideoThread(QThread):
         self.vehicle_detector_path=""
         self.Mode = 0
         self.classes = []
-        
-        self._is_paused = False
-        self._mutex = QMutex()
-        self._condition = QWaitCondition()
-        self._is_running = True
 
 
         self.vehicle_detector = YOLO("weights/vehicle_yolov8s_640.pt", task='detect')
@@ -166,7 +158,7 @@ class VideoThread(QThread):
                 success, frame = cap.read()
                 if success:
                     #frame = cv2.resize(frame, (1380, 920))
-                    frame = imutils.resize(frame,width=1201)
+                    frame = imutils.resize(frame,width=1621)
                     #results = model.track(frame, persist=True, classes=[0])  # Tracking Car only
                     if self.classes == []:
                         results = model.track(frame, persist=True, tracker="bytetrack.yaml")
@@ -310,10 +302,6 @@ class VideoThread(QThread):
                 os.makedirs(detected_plates_path)
             num_frame = 0 
             while cap.isOpened():
-                self._mutex.lock()
-                while self._is_paused:
-                    self._condition.wait(self._mutex)
-                self._mutex.unlock()
                 ret, frame = cap.read()
                 num_frame += 1
                 if int(num_frame) == 500:
@@ -399,8 +387,8 @@ class VideoThread(QThread):
                             and len(plate_number) > 5 \
                             and check_legit_plate(plate_number)
                         if success:
-                            self.cnt += 1
                             plate_number = correct_plate(plate_number)
+                            self.cnt += 1
                             if self.cnt % 2 == 0 and vehicle["vehicle_image"] is not None and vehicle["plate_image"] is not None:
                                 self.plate_number_signal.emit(plate_number)
                                 self.change_pixmap_signal_1.emit(vehicle["vehicle_image"])
@@ -535,26 +523,12 @@ class VideoThread(QThread):
         # self.tracker = Sort()
         self.vehicles_dict = {}
 
-    # def stop(self):
-    #     """Sets run flag to False and waits for thread to finish"""
-    #     self._run_flag = False
-    #     #self.wait()
-    #     self.quit()
-    #     self.terminate()
     def stop(self):
-        self._is_running = False
-        self.resume()  # Đảm bảo thoát khỏi bất kỳ chờ đợi nào
-
-    def pause(self):
-        self._mutex.lock()
-        self._is_paused = True
-        self._mutex.unlock()
-
-    def resume(self):
-        self._mutex.lock()
-        self._is_paused = False
-        self._condition.wakeAll()
-        self._mutex.unlock()
+        """Sets run flag to False and waits for thread to finish"""
+        self._run_flag = False
+        #self.wait()
+        self.quit()
+        self.terminate()
     
     def continueThread(self):
         self._run_flag = True
@@ -621,14 +595,15 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.uic = Ui_MainWindow()
         self.uic.setupUi(self)
+
         app = wx.App(False)
         width, height = wx.GetDisplaySize()
         print(width)
         print(height)
 
         # ------------------------------------------------------
-        self.display_width = 1201
-        self.display_height = 720
+        self.display_width = 1621
+        self.display_height = 1011
         #self.setGeometry(30, 30, 1000, 600)
         # create the label that holds the image
         self.uic.label_img.resize(self.display_width, self.display_height)
@@ -646,8 +621,6 @@ class MainWindow(QMainWindow):
 
         #-------------------------------------------
         self.thread = VideoThread()
-        self.thread.start()
-
         # connect its signal to the update_image slot
         self.thread.change_pixmap_signal.connect(self.update_image)
         self.thread.change_pixmap_signal_1.connect(self.update_vehicle_crop)
@@ -775,9 +748,9 @@ class MainWindow(QMainWindow):
     #Update counter
     @pyqtSlot(dict)
     def updateCounter(self):
-        self.uic.textBrowser.setText(str(self.thread.vehicleCounter[1]))
+        self.uic.textBrowser_5.setText(str(self.thread.vehicleCounter[1]))
         self.uic.textBrowser_2.setText(str(self.thread.vehicleCounter[3]))
-        self.uic.textBrowser_3.setText(str(self.thread.vehicleCounter[2]))
+        self.uic.textBrowser_6.setText(str(self.thread.vehicleCounter[2]))
         self.uic.textBrowser_4.setText(str(self.thread.vehicleCounter[0]))
 
     def closeEvent(self, event):
@@ -785,20 +758,13 @@ class MainWindow(QMainWindow):
         #self.imgthread.stop()
         event.accept()
 
-    # def pause(self):
-    #     #if self.thread.isRunning():
-    #     self.thread.stop()
-    #     self.status = False
-    
-    # def continueBt(self):
-    #     self.thread.continueThread()
-    #     self.status = True
     def pause(self):
-        self.thread.pause()
+        #if self.thread.isRunning():
+        self.thread.stop()
         self.status = False
     
     def continueBt(self):
-        self.thread.resume()
+        self.thread.continueThread()
         self.status = True
 
     @pyqtSlot(np.ndarray)
@@ -997,9 +963,9 @@ class MainWindow(QMainWindow):
             self.uic.Videopath_txt.clear()
             self.uic.PretrainPathTxt.clear()
 
-            self.uic.textBrowser.clear()
+            self.uic.textBrowser_5.clear()
             self.uic.textBrowser_2.clear()
-            self.uic.textBrowser_3.clear()
+            self.uic.textBrowser_6.clear()
             self.uic.textBrowser_4.clear()
 
             self.uic.car_det.clear()
