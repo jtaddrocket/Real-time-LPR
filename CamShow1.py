@@ -6,8 +6,9 @@ from PyQt5.QtWidgets import QWidget, QApplication, QLabel, QVBoxLayout,QMenu, QA
 from PyQt5.QtGui import QPixmap, QPainter, QImage, QPen
 from PyQt5.QtCore import pyqtSignal, pyqtSlot, Qt, QThread,QPoint,QRect
 
+import time 
 import numpy as np
-from my_alpr3 import Ui_MainWindow
+from my_alpr4 import Ui_MainWindow
 import imutils
 # -----------------Counting Thread-----------------
 from collections import defaultdict
@@ -18,18 +19,31 @@ import os
 import torch
 # -------------------------------------------------
 from tracking.sort import Sort
+from tracking.deep_sort import DeepSort
 from utils.utils import map_label, check_image_size, draw_text, check_legit_plate, \
-    gettime, compute_color, argmax, BGR_COLORS, VEHICLES, crop_expanded_plate
+    gettime, compute_color, argmax, BGR_COLORS, VEHICLES, crop_expanded_plate, correct_plate
+    
 
 #--------------------------------------------------
 from ppocr_onnx import DetAndRecONNXPipeline as PlateReader
 from tracking.sort import Sort
 from ultralytics import YOLO
+from PyQt5.QtCore import QThread, QWaitCondition, QMutex
+
 #--------------------------------------------------
 
 class VideoThread(QThread):
     change_pixmap_signal = pyqtSignal(np.ndarray)
+    change_pixmap_signal_1 = pyqtSignal(np.ndarray)
+    change_pixmap_signal_2 = pyqtSignal(np.ndarray)
+
+    change_pixmap_signal_3 = pyqtSignal(np.ndarray)
+    change_pixmap_signal_4 = pyqtSignal(np.ndarray)
+
     vehicle_count_signal = pyqtSignal(dict)
+    plate_number_signal = pyqtSignal(str)
+    plate_number_signal_1 = pyqtSignal(str)
+    result_form_signal = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
@@ -39,9 +53,15 @@ class VideoThread(QThread):
         self.vehicle_detector_path=""
         self.Mode = 0
         self.classes = []
+        
+        self._is_paused = False
+        self._mutex = QMutex()
+        self._condition = QWaitCondition()
+        self._is_running = True
 
-        self.vehicle_detector = YOLO(self.vehicle_detector_path, task='detect')
-        self.plate_detector = YOLO("weights/plate_yolov8n_320_2024.engine", task='detect')
+
+        self.vehicle_detector = YOLO("weights/vehicle_yolov8s_640.pt", task='detect')
+        self.plate_detector = YOLO("weights/plate_yolov8n_320_2024.pt", task='detect')
         self.plate_reader = PlateReader(
             text_det_onnx_model="weights/ppocrv4/ch_PP-OCRv4_det_infer.onnx",
             text_rec_onnx_model="weights/ppocrv4/ch_PP-OCRv4_rec_infer.onnx",
@@ -50,7 +70,7 @@ class VideoThread(QThread):
         
         
         #-------------------Tracker----------------
-        self.dsort_weight = "weights/deepsort/deepsort.onnx"
+        self.dsort_weight = "weights/reid_model.onnx"
         self.init_tracker()
         #------------------------------------------
 
@@ -61,9 +81,14 @@ class VideoThread(QThread):
             3: 0 #truck
         }
 
+        self.plate_data = ""
+        self.cnt = 0
+
         # Miscellaneous for displaying
         self.save_dir = "data/logs"
         self.save = True
+        self.lang = "coco_vi"
+        self.color = BGR_COLORS
 
         #print(self.data)
     @pyqtSlot(dict)
@@ -72,7 +97,7 @@ class VideoThread(QThread):
         # 'pt':'C:/Users/Admin/PythonLession/yolo_dataset/best_carplate5.pt', "CountMode": False, "LinePoint": [],
         # "PolygonPoint":[]}
         print(dict_data)
-        self.video_path =dict_data["v"]
+        self.video_path = dict_data["v"]
         self.vehicle_detector_path = dict_data['pt']
         self.Mode = dict_data['Mode']
         self.classes = dict_data['classes']
@@ -98,7 +123,7 @@ class VideoThread(QThread):
         video_path = self.video_path 
         vehicle_detector_path = self.vehicle_detector_path
 
-        if vehicle_detector_path != "" and video_path != "" and not self.CountMode:
+        if vehicle_detector_path != "" and video_path != "" and (not self.CountMode) and (not self.ReadPlate):
             model = YOLO(vehicle_detector_path)
             cap = cv2.VideoCapture(video_path)
             # Loop through the video frames
@@ -141,7 +166,7 @@ class VideoThread(QThread):
                 success, frame = cap.read()
                 if success:
                     #frame = cv2.resize(frame, (1380, 920))
-                    frame = imutils.resize(frame,width=1080)
+                    frame = imutils.resize(frame,width=1201)
                     #results = model.track(frame, persist=True, classes=[0])  # Tracking Car only
                     if self.classes == []:
                         results = model.track(frame, persist=True, tracker="bytetrack.yaml")
@@ -274,8 +299,21 @@ class VideoThread(QThread):
                 #cap.release()
         elif vehicle_detector_path != "" and video_path != "" and self.ReadPlate and not self.CountMode:
             cap = cv2.VideoCapture(video_path)
+            log_path = self.save_dir
+            frames_path = os.path.join(log_path, "frames")
+            detected_objects_path = os.path.join(log_path, "objects")
+            detected_plates_path = os.path.join(log_path, "plates")
+            if not os.path.exists(log_path):
+                os.makedirs(log_path)
+                os.makedirs(frames_path)
+                os.makedirs(detected_objects_path)
+                os.makedirs(detected_plates_path)
             num_frame = 0 
             while cap.isOpened():
+                self._mutex.lock()
+                while self._is_paused:
+                    self._condition.wait(self._mutex)
+                self._mutex.unlock()
                 ret, frame = cap.read()
                 num_frame += 1
                 if int(num_frame) == 500:
@@ -302,7 +340,10 @@ class VideoThread(QThread):
                     vehicle_labels = vehicle_boxes.cls
 
                     try:        
-                        outputs = self.tracker.update(vehicle_boxes.cpu().xyxy).astype(int)
+                        # outputs = self.tracker.update(vehicle_boxes.cpu().xyxy).astype(int)
+                        outputs = self.tracker.update(vehicle_boxes.cpu().xywh,
+                                                      vehicle_boxes.cpu().conf,
+                                                      frame)
                     except BaseException:
                         continue
 
@@ -326,13 +367,151 @@ class VideoThread(QThread):
                         cv2.rectangle(
                             displayed_frame, src_point, dst_point, color, 1)
                         
+                    for index, box in enumerate(vehicle_xyxy):
+                        if box is None:
+                            continue
+                        label_name = map_label(int(vehicle_labels[index]), VEHICLES[self.lang])
+                        box = box.cpu().numpy().astype(int)
+                        draw_text(img=displayed_frame, text=label_name,
+                                pos=(box[0], box[1]),
+                                text_color=self.color["blue"],
+                                text_color_bg=self.color["green"])
+                    
+                    """
+                    --------------- PLATE RECOGNITION ---------------
+                    This section will run if --read-plate
+                    Plate recognition include two subsections: detection and OCR
+                        - Detection: Ultralytics YOLOv8
+                        - Optical Character Recognition: Baidu PaddleOCR
+                    """
+                    active_vehicles = []
+                    input_batch = []
+                    for identity in in_frame_indentities:
+                        
+                        vehicle = self.vehicles_dict[str(identity)]
+                        if "ocr_conf" not in vehicle:
+                            vehicle["ocr_conf"] = 0.0
+                            vehicle["plate_number"] = ""
+                        box = vehicle["bbox_xyxy"].astype(int)
+                        plate_number = self.vehicles_dict[str(
+                            identity)]["plate_number"]
+                        success = (vehicle["ocr_conf"] > self.ocr_thres) \
+                            and len(plate_number) > 5 \
+                            and check_legit_plate(plate_number)
+                        if success:
+                            self.cnt += 1
+                            plate_number = correct_plate(plate_number)
+                            if self.cnt % 2 == 0 and vehicle["vehicle_image"] is not None and vehicle["plate_image"] is not None:
+                                self.plate_number_signal.emit(plate_number)
+                                self.change_pixmap_signal_1.emit(vehicle["vehicle_image"])
+                                self.change_pixmap_signal_2.emit(vehicle["plate_image"])
+                                jilu = time.strftime("%b %d %Y %H:%M:%S",time.localtime(time.time())) +  'License Plate Number: ' + plate_number + " vehicle_id:" + str(identity)
+                                self.result_form_signal.emit(jilu)
+                                
+                            elif self.cnt % 2 != 0 and vehicle["vehicle_image"] is not None and vehicle["plate_image"] is not None:
+                                self.plate_number_signal_1.emit(plate_number)
+                                self.change_pixmap_signal_3.emit(vehicle["vehicle_image"])
+                                self.change_pixmap_signal_4.emit(vehicle["plate_image"])
+                                jilu = time.strftime("%b %d %Y %H:%M:%S",time.localtime(time.time())) +  'License Plate Number: ' + plate_number + " vehicle_id:" + str(identity)
+                                self.result_form_signal.emit(jilu)
+                                
+                            # jilu = time.strftime("%b %d %Y %H:%M:%S",time.localtime(time.time())) +  'License Plate Number: ' + plate_number
+                            # self.result_form_signal.emit(jilu)
+                            pos = (box[0], box[1] + 26)
+                            draw_text(
+                                img=displayed_frame,
+                                text=plate_number,
+                                pos=pos,
+                                text_color=self.color["blue"],
+                                text_color_bg=self.color["green"])
+                            if self.save and not vehicle["save"]:
+                                cropped_vehicle = frame[box[1]
+                                    :box[3], box[0]:box[2], :]
+                                if check_image_size(vehicle["plate_image"], 32, 16):
+                                    cv2.imwrite(
+                                        f"{detected_plates_path}/{plate_number}.jpg",
+                                        vehicle["plate_image"])
+                                    if cropped_vehicle is not None:
+                                        cv2.imwrite(
+                                            f"{detected_objects_path}/{plate_number}.jpg", cropped_vehicle)
+                                    del vehicle["plate_image"]
+                                    del vehicle["vehicle_image"]
+                                    vehicle["vehicle_image"] = None
+                                    vehicle["plate_image"] = None
+                                    vehicle["save"] = True
+                                    
+                            continue
+                        else:
+                            # if box[1] < thresh_h: # Ignore vehicle out of recognition zone
+                            #     in_frame_indentities.remove(identity)
+                            #     continue
+                            # crop vehicle image to push into the plate
+                            # detector
+                            cropped_vehicle = frame[box[1]
+                                :box[3], box[0]:box[2], :]
+                            vehicle["vehicle_image"] = cropped_vehicle
+                            if not check_image_size(
+                                    cropped_vehicle, 112, 112):  # ignore too small image!
+                                continue
+                            input_batch.append(cropped_vehicle)
+                            active_vehicles.append(vehicle)
+                    if len(input_batch) > 0:
+                        plate_detections = self.plate_detector(
+                            input_batch,
+                            verbose=False,
+                            imgsz=320,
+                            device="0",
+                            conf=0.25)
+                        vehicle_having_plate = []
+                        for id, detection in enumerate(plate_detections):
+                            vehicle = active_vehicles[id]
+                            cropped_vehicle = input_batch[id]
+                            box = vehicle["bbox_xyxy"].astype(int)
+                            plate_xyxy = detection.boxes.xyxy
+                            if len(plate_xyxy) < 1:
+                                continue
+                            # Display plate detection
+                            plate_xyxy = plate_xyxy[0]
+                            plate_xyxy = plate_xyxy.cpu().numpy().astype(int)
+                            src_point = (
+                                plate_xyxy[0] + box[0], plate_xyxy[1] + box[1])
+                            dst_point = (
+                                plate_xyxy[2] + box[0], plate_xyxy[3] + box[1])
+                            cv2.rectangle(
+                                displayed_frame,
+                                src_point,
+                                dst_point,
+                                self.color["green"],
+                                thickness=2)
+                            # cropped_plate = cropped_vehicle[plate_xyxy[1]:plate_xyxy[3], \
+                            # plate_xyxy[0]:plate_xyxy[2], :]
+                            try:
+                                cropped_plate = crop_expanded_plate(
+                                    plate_xyxy, cropped_vehicle, 0.15)
+                            except BaseException:
+                                cropped_plate = np.zeros((8, 8, 3))
+
+
+                            vehicle["plate_image"] = cropped_plate
+                            vehicle_having_plate.append(vehicle)
+
+                        if len(vehicle_having_plate) > 0:
+                            for vehicle in vehicle_having_plate:
+                                plate_info, conf = self.extract_plate(
+                                    vehicle["plate_image"])
+                                cur_ocr_conf = vehicle["ocr_conf"]
+                                if conf > cur_ocr_conf:
+                                    vehicle["plate_number"] = plate_info
+                                    vehicle["ocr_conf"] = conf
+                                
+                                # self.plate_data = correct_plate(plate_number)
+
+
+
                     self.change_pixmap_signal.emit(displayed_frame)
-
         else:
-
             print("Not Config this Mode")
     
-
 
     def extract_plate(self, plate_image):
         results = self.plate_reader.detect_and_ocr(plate_image)
@@ -348,15 +527,37 @@ class VideoThread(QThread):
             return '', 0
     
     def init_tracker(self):
-        self.tracker = Sort()
+        self.tracker = DeepSort(self.dsort_weight, max_dist=0.2,
+                                    min_confidence=0.3, nms_max_overlap=0.5,
+                                    max_iou_distance=0.7, max_age=70,
+                                    n_init=3, nn_budget=100,
+                                    use_cuda=torch.cuda.is_available())
+        # self.tracker = Sort()
         self.vehicles_dict = {}
 
+    # def stop(self):
+    #     """Sets run flag to False and waits for thread to finish"""
+    #     self._run_flag = False
+    #     #self.wait()
+    #     self.quit()
+    #     self.terminate()
     def stop(self):
-        """Sets run flag to False and waits for thread to finish"""
-        self._run_flag = False
-        #self.wait()
-        self.quit()
-        self.terminate()
+        self._is_running = False
+        self.resume()  # Đảm bảo thoát khỏi bất kỳ chờ đợi nào
+
+    def pause(self):
+        self._mutex.lock()
+        self._is_paused = True
+        self._mutex.unlock()
+
+    def resume(self):
+        self._mutex.lock()
+        self._is_paused = False
+        self._condition.wakeAll()
+        self._mutex.unlock()
+    
+    def continueThread(self):
+        self._run_flag = True
 
     def countingLinepolygon(self,video_path, yolo_path, Linepoints, PolygonPoints):
         annotated_frame = None
@@ -420,14 +621,13 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.uic = Ui_MainWindow()
         self.uic.setupUi(self)
-
         app = wx.App(False)
         width, height = wx.GetDisplaySize()
         print(width)
         print(height)
 
         # ------------------------------------------------------
-        self.display_width = 1080   
+        self.display_width = 1201
         self.display_height = 720
         #self.setGeometry(30, 30, 1000, 600)
         # create the label that holds the image
@@ -440,13 +640,25 @@ class MainWindow(QMainWindow):
         self.uic.ShowBt.clicked.connect(self.start)
 
         self.uic.StopBt.clicked.connect(self.pause)
+        self.uic.RecordBt.clicked.connect(self.continueBt)
         self.uic.ExitBt.clicked.connect(self.close)
         self.uic.ClearDatapoint.clicked.connect(self.cleardata)
 
         #-------------------------------------------
         self.thread = VideoThread()
+        self.thread.start()
+
         # connect its signal to the update_image slot
         self.thread.change_pixmap_signal.connect(self.update_image)
+        self.thread.change_pixmap_signal_1.connect(self.update_vehicle_crop)
+        self.thread.change_pixmap_signal_2.connect(self.update_plate_crop)
+        self.thread.plate_number_signal.connect(self.update_plate_number)
+        self.thread.result_form_signal.connect(self.update_result_form)
+
+        self.thread.change_pixmap_signal_3.connect(self.update_vehicle_crop_1)
+        self.thread.change_pixmap_signal_4.connect(self.update_plate_crop_1)
+        self.thread.plate_number_signal_1.connect(self.update_plate_number_1)
+
         self.dataconfig.connect(self.thread.receivedata)
         self.thread.vehicle_count_signal.connect(self.updateCounter)
 
@@ -499,17 +711,18 @@ class MainWindow(QMainWindow):
                 for j in range(0, len(poscomma) - 1):
                     if data_in_classtxt[poscomma[j] + 1:poscomma[j + 1]] != "":
                         self.classes.append(int(data_in_classtxt[poscomma[j] + 1:poscomma[j + 1]]))
-            if self.MultilinePoint or self.MutiPolypoint and self.uic.Combo_Mode.currentIndex()==2:
-                data = {'classes': self.classes, 'Mode': self.Mode, 'v': self.video_path, 'pt': self.pretrainpath,
-                        'flag': True, "CountMode": True, "LinePoint": self.MultilinePoint,
-                        "PolygonPoint": self.MutiPolypoint, 
-                        "ReadPlate": False}
-                
-            elif self.uic.Combo_Mode.currentIndex()==3:
+                        
+            if self.uic.Combo_Mode.currentIndex()==3:
                 data = {'classes': self.classes, 'Mode': self.Mode, 'v': self.video_path, 'pt': self.pretrainpath,
                         'flag': True, "CountMode": False, "LinePoint": [],
                         "PolygonPoint": [], 
                         "ReadPlate": True}
+                
+            elif self.MultilinePoint or self.MutiPolypoint and self.uic.Combo_Mode.currentIndex()==2:
+                data = {'classes': self.classes, 'Mode': self.Mode, 'v': self.video_path, 'pt': self.pretrainpath,
+                        'flag': True, "CountMode": True, "LinePoint": self.MultilinePoint,
+                        "PolygonPoint": self.MutiPolypoint, 
+                        "ReadPlate": False}
 
             else:
                 data = {'classes': self.classes, 'Mode': self.Mode, 'v': self.video_path, 'pt': self.pretrainpath,
@@ -572,11 +785,21 @@ class MainWindow(QMainWindow):
         #self.imgthread.stop()
         event.accept()
 
+    # def pause(self):
+    #     #if self.thread.isRunning():
+    #     self.thread.stop()
+    #     self.status = False
+    
+    # def continueBt(self):
+    #     self.thread.continueThread()
+    #     self.status = True
     def pause(self):
-        #if self.thread.isRunning():
-        self.thread.stop()
+        self.thread.pause()
         self.status = False
-        
+    
+    def continueBt(self):
+        self.thread.resume()
+        self.status = True
 
     @pyqtSlot(np.ndarray)
     def update_image(self, cv_img):
@@ -585,7 +808,53 @@ class MainWindow(QMainWindow):
         qt_img = self.convert_cv_qt(cv_img)
         self.pix = qt_img
         self.uic.label_img.setPixmap(qt_img)
+
+    @pyqtSlot(np.ndarray)
+    def update_vehicle_crop(self, cv_img):
+        qt_img = self.convert_cv_qt(cv_img)
+        scaled_qt_img = qt_img.scaled(self.uic.car_det.width(), self.uic.car_det.height(), Qt.KeepAspectRatio)
+        self.pix = scaled_qt_img
+        self.uic.car_det.setAlignment(Qt.AlignCenter)
+        self.uic.car_det.setPixmap(scaled_qt_img)
+
+    @pyqtSlot(np.ndarray)
+    def update_plate_crop(self, cv_img):
+        qt_img = self.convert_cv_qt(cv_img)
+        scaled_qt_img = qt_img.scaled(self.uic.pr_loc.width(), self.uic.pr_loc.height(), Qt.KeepAspectRatio)
+        self.pix = scaled_qt_img
+        self.uic.pr_loc.setAlignment(Qt.AlignCenter)
+        self.uic.pr_loc.setPixmap(scaled_qt_img)
+
+    @pyqtSlot(str)
+    def update_plate_number(self, plate_number):
+        self.uic.pr_loc_4.setAlignment(Qt.AlignCenter)
+        self.uic.pr_loc_4.setText(plate_number)
     
+    @pyqtSlot(str)
+    def update_result_form(self, info):
+        self.uic.result_form.appendPlainText(info)
+
+    @pyqtSlot(np.ndarray)
+    def update_vehicle_crop_1(self, cv_img):
+        qt_img = self.convert_cv_qt(cv_img)
+        scaled_qt_img = qt_img.scaled(self.uic.car_det_2.width(), self.uic.car_det_2.height(), Qt.KeepAspectRatio)
+        self.pix = scaled_qt_img
+        self.uic.car_det_2.setAlignment(Qt.AlignCenter)
+        self.uic.car_det_2.setPixmap(scaled_qt_img)
+
+    @pyqtSlot(np.ndarray)
+    def update_plate_crop_1(self, cv_img):
+        qt_img = self.convert_cv_qt(cv_img)
+        scaled_qt_img = qt_img.scaled(self.uic.pr_loc_2.width(), self.uic.pr_loc_2.height(), Qt.KeepAspectRatio)
+        self.pix = scaled_qt_img
+        self.uic.pr_loc_2.setAlignment(Qt.AlignCenter)
+        self.uic.pr_loc_2.setPixmap(scaled_qt_img)
+
+    @pyqtSlot(str)
+    def update_plate_number_1(self, plate_number):
+        self.uic.pr_loc_5.setAlignment(Qt.AlignCenter)
+        self.uic.pr_loc_5.setText(plate_number)
+
     def convert_cv_qt(self, cv_img):
         """Convert from an opencv image to QPixmap"""
         rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
@@ -722,12 +991,24 @@ class MainWindow(QMainWindow):
             self.MultiRecpoint.clear()
 
 
-            self.uic.PointData.setText("")
+            self.uic.PointData.clear()
 
-            self.uic.textBrowser.setText("")
-            self.uic.textBrowser_2.setText("")
-            self.uic.textBrowser_3.setText("")
-            self.uic.textBrowser_4.setText("")
+            self.uic.label_img.clear()
+            self.uic.Videopath_txt.clear()
+            self.uic.PretrainPathTxt.clear()
+
+            self.uic.textBrowser.clear()
+            self.uic.textBrowser_2.clear()
+            self.uic.textBrowser_3.clear()
+            self.uic.textBrowser_4.clear()
+
+            self.uic.car_det.clear()
+            self.uic.pr_loc.clear()
+            self.uic.pr_loc_4.clear()
+
+            self.uic.car_det_2.clear()
+            self.uic.pr_loc_2.clear()
+            self.uic.pr_loc_5.clear()
 
             # self.uic.pattle.setText("")
             
