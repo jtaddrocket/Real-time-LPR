@@ -224,7 +224,6 @@ Sinh viên K66 ngành Máy tính và Khoa học thông tin - Trường Đại h�
 * [Sort](https://github.com/abewley/sort)
 * [Intelligent-Traffic-Based-On-CV](https://github.com/Kevinnan-teen/Intelligent-Traffic-Based-On-CV?tab=readme-ov-file)
 * [license-plate-recognition](https://github.com/tungedng2710/license-plate-recognition?fbclid=IwY2xjawEVkhZleHRuA2FlbQIxMAABHagUsytDTAnrpsBruPhEaEZ96e80taegmX6txNrIW1mn-pVqkWAXS3uOqA_aem_m1Xq30PC85lTGPIflJs3NA)
-* 
 
 
 
